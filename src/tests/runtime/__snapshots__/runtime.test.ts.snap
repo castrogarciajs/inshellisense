@@ -414,6 +414,24 @@ exports[`parseCommand fullyTypedSuggestion 1`] = `
 }
 `;
 
+exports[`parseCommand generatorUsingPartialInput 1`] = `
+{
+  "charactersToDrop": 27,
+  "suggestions": [
+    {
+      "allNames": [
+        "Microsoft.Azure.WebJobs.Core",
+      ],
+      "description": "This library simplifies the task of adding background processing to your Microsoft Azure Web Sites. The SDK uses Microsoft Azure Storage, triggering a function in your program when items are added to Queues and Blobs. A dashboard provides rich monitoring and diagnostics for the programs that you write by using the SDK. For more information, please visit http://go.microsoft.com/fwlink/?LinkID=320971",
+      "icon": "📀",
+      "insertValue": "Microsoft.Azure.WebJobs.Core",
+      "name": "Microsoft.Azure.WebJobs.Core",
+      "priority": 60,
+    },
+  ],
+}
+`;
+
 exports[`parseCommand loadSpec 1`] = `
 {
   "charactersToDrop": 3,
@@ -432,11 +450,87 @@ exports[`parseCommand loadSpec 1`] = `
 }
 `;
 
-exports[`parseCommand noOptionsSuggestedAfterVariadicArg 1`] = `
+exports[`parseCommand noArgsArgumentGiven 1`] = `
+{
+  "charactersToDrop": 0,
+  "suggestions": [
+    {
+      "allNames": [
+        "--analyzer-output",
+      ],
+      "description": "Static analyzer report output format",
+      "icon": "🔗",
+      "insertValue": undefined,
+      "name": "--analyzer-output",
+      "priority": 50,
+    },
+    {
+      "allNames": [
+        "--analyze",
+      ],
+      "description": "Run the static analyzer",
+      "icon": "🔗",
+      "insertValue": undefined,
+      "name": "--analyze",
+      "priority": 50,
+    },
+    {
+      "allNames": [
+        "-arcmt-migrate-emit-errors",
+      ],
+      "description": "Emit ARC errors even if the migrator can fix them",
+      "icon": "🔗",
+      "insertValue": undefined,
+      "name": "-arcmt-migrate-emit-errors",
+      "priority": 50,
+    },
+  ],
+}
+`;
+
+exports[`parseCommand noOptionsSuggestedDuringVariadicArg 1`] = `
+{
+  "charactersToDrop": 3,
+  "suggestions": [],
+}
+`;
+
+exports[`parseCommand optionsSuggestedAfterVariadicArg 1`] = `
 {
   "argumentDescription": undefined,
-  "charactersToDrop": 1,
-  "suggestions": [],
+  "charactersToDrop": 2,
+  "suggestions": [
+    {
+      "allNames": [
+        "package-lock.json",
+      ],
+      "description": undefined,
+      "icon": "📄",
+      "insertValue": undefined,
+      "name": "package-lock.json",
+      "priority": 55,
+    },
+    {
+      "allNames": [
+        "-L",
+      ],
+      "description": "Follow all symbolic links to final target and list the file or directory the link references rather than the link itself.  This option cancels the -P option",
+      "icon": "🔗",
+      "insertValue": undefined,
+      "name": "-L",
+      "priority": 50,
+    },
+    {
+      "allNames": [
+        "-l",
+      ],
+      "description": "(The lowercase letter \`\`ell''.)  List in long format.  (See below.)  A total sum for all the file sizes is output on a line before the long listing",
+      "icon": "🔗",
+      "insertValue": undefined,
+      "name": "-l",
+      "priority": 50,
+    },
+  ],
 }
 `;
 
@@ -473,6 +567,42 @@ exports[`parseCommand partialPrefixFilter 1`] = `
       "insertValue": undefined,
       "name": "stash",
       "priority": 50,
+    },
+  ],
+}
+`;
+
+exports[`parseCommand provideFileSuggestion 1`] = `
+{
+  "charactersToDrop": 4,
+  "suggestions": [
+    {
+      "allNames": [
+        "README.md",
+      ],
+      "description": undefined,
+      "icon": "📄",
+      "insertValue": undefined,
+      "name": "README.md",
+      "priority": 55,
+    },
+  ],
+}
+`;
+
+exports[`parseCommand provideFolderSuggestion 1`] = `
+{
+  "charactersToDrop": 2,
+  "suggestions": [
+    {
+      "allNames": [
+        "src",
+      ],
+      "description": undefined,
+      "icon": "📁",
+      "insertValue": undefined,
+      "name": "src",
+      "priority": 55,
     },
   ],
 }

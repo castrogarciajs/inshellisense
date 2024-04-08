@@ -1,20 +1,28 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { inputModifier } from "./input.js";
+import readline from "node:readline";
+import ansi from "ansi-escapes";
+import chalk from "chalk";
+
 import log from "../utils/log.js";
-import { Shell } from "../utils/shell.js";
+import { getBackspaceSequence, Shell } from "../utils/shell.js";
 import isterm from "../isterm/index.js";
 import { eraseLinesBelow } from "../utils/ansi.js";
-import ansi from "ansi-escapes";
-import { SuggestionManager, MAX_LINES } from "./suggestionManager.js";
+import { SuggestionManager, MAX_LINES, KeyPressEvent } from "./suggestionManager.js";
 
-export const render = async (shell: Shell) => {
-  const term = await isterm.spawn({ shell, rows: process.stdout.rows, cols: process.stdout.columns });
-  const suggestionManager = new SuggestionManager(term);
+export const renderConfirmation = (live: boolean): string => {
+  const statusMessage = live ? chalk.green("live") : chalk.red("not found");
+  return `inshellisense session [${statusMessage}]\n`;
+};
+
+export const render = async (shell: Shell, underTest: boolean, parentTermExit: boolean) => {
+  const term = await isterm.spawn({ shell, rows: process.stdout.rows, cols: process.stdout.columns, underTest });
+  const suggestionManager = new SuggestionManager(term, shell);
   let hasActiveSuggestions = false;
-  let previousSuggestionsColumns = 0;
-  process.stdin.setRawMode(true);
+  let previousSuggestionsRows = 0;
+  if (process.stdin.isTTY) process.stdin.setRawMode(true);
+  readline.emitKeypressEvents(process.stdin);
 
   const writeOutput = (data: string) => {
     log.debug({ msg: "writing data", data });
@@ -24,32 +32,39 @@ export const render = async (shell: Shell) => {
   writeOutput(ansi.clearTerminal);
 
   term.onData((data) => {
-    const commandState = term.getCommandState();
-    if ((commandState.hasOutput || hasActiveSuggestions) && !commandState.persistentOutput) {
-      if (term.getCursorState().remainingLines < previousSuggestionsColumns) {
+    if (hasActiveSuggestions) {
+      // Considers when data includes newlines which have shifted the cursor position downwards
+      const newlines = Math.max((data.match(/\r/g) || []).length, (data.match(/\n/g) || []).length);
+      const linesOfInterest = MAX_LINES + newlines;
+      if (term.getCursorState().remainingLines <= MAX_LINES) {
+        // handles when suggestions get loaded before shell output so you need to always clear below output as a precaution
+        if (term.getCursorState().remainingLines != 0) {
+          writeOutput(ansi.cursorHide + ansi.cursorSavePosition + eraseLinesBelow(linesOfInterest + 1) + ansi.cursorRestorePosition);
+        }
         writeOutput(
-          ansi.cursorHide +
+          data +
+            ansi.cursorHide +
             ansi.cursorSavePosition +
-            ansi.cursorPrevLine.repeat(MAX_LINES) +
-            term.getCells(MAX_LINES, "above") +
+            ansi.cursorPrevLine.repeat(linesOfInterest) +
+            term.getCells(linesOfInterest, "above") +
             ansi.cursorRestorePosition +
-            ansi.cursorShow +
-            data,
+            ansi.cursorShow,
         );
       } else {
-        writeOutput(ansi.cursorHide + ansi.cursorSavePosition + eraseLinesBelow(MAX_LINES + 1) + ansi.cursorRestorePosition + ansi.cursorShow + data);
+        writeOutput(ansi.cursorHide + ansi.cursorSavePosition + eraseLinesBelow(linesOfInterest + 1) + ansi.cursorRestorePosition + ansi.cursorShow + data);
       }
     } else {
       writeOutput(data);
     }
 
-    setImmediate(async () => {
-      const suggestion = await suggestionManager.render();
+    process.nextTick(async () => {
+      // validate result to prevent stale suggestion being provided
+      const suggestion = suggestionManager.validate(await suggestionManager.render(term.getCursorState().remainingLines));
       const commandState = term.getCommandState();
 
       if (suggestion.data != "" && commandState.cursorTerminated && !commandState.hasOutput) {
         if (hasActiveSuggestions) {
-          if (term.getCursorState().remainingLines < suggestion.columns) {
+          if (term.getCursorState().remainingLines < MAX_LINES) {
             writeOutput(
               ansi.cursorHide +
                 ansi.cursorSavePosition +
@@ -63,7 +78,7 @@ export const render = async (shell: Shell) => {
                 ansi.cursorShow,
             );
           } else {
-            const offset = MAX_LINES - suggestion.columns;
+            const offset = MAX_LINES - suggestion.rows;
             writeOutput(
               ansi.cursorHide +
                 ansi.cursorSavePosition +
@@ -75,13 +90,13 @@ export const render = async (shell: Shell) => {
             );
           }
         } else {
-          if (term.getCursorState().remainingLines < suggestion.columns) {
+          if (term.getCursorState().remainingLines < MAX_LINES) {
             writeOutput(ansi.cursorHide + ansi.cursorSavePosition + ansi.cursorUp() + suggestion.data + ansi.cursorRestorePosition + ansi.cursorShow);
           } else {
             writeOutput(
               ansi.cursorHide +
                 ansi.cursorSavePosition +
-                ansi.cursorNextLine.repeat(suggestion.columns) +
+                ansi.cursorNextLine.repeat(suggestion.rows) +
                 suggestion.data +
                 ansi.cursorRestorePosition +
                 ansi.cursorShow,
@@ -91,7 +106,7 @@ export const render = async (shell: Shell) => {
         hasActiveSuggestions = true;
       } else {
         if (hasActiveSuggestions) {
-          if (term.getCursorState().remainingLines < previousSuggestionsColumns) {
+          if (term.getCursorState().remainingLines <= MAX_LINES) {
             writeOutput(
               ansi.cursorHide +
                 ansi.cursorSavePosition +
@@ -106,19 +121,28 @@ export const render = async (shell: Shell) => {
         }
         hasActiveSuggestions = false;
       }
-      previousSuggestionsColumns = suggestion.columns;
+      previousSuggestionsRows = suggestion.rows;
     });
   });
-  process.stdin.on("data", (d: Buffer) => {
-    const suggestionResult = suggestionManager.update(d);
-    if (previousSuggestionsColumns > 0 && suggestionResult == "handled") {
+
+  process.stdin.on("keypress", (...keyPress: KeyPressEvent) => {
+    const press = keyPress[1];
+    const inputHandled = suggestionManager.update(press);
+    if (previousSuggestionsRows > 0 && inputHandled) {
       term.noop();
-    } else if (suggestionResult != "fully-handled") {
-      term.write(inputModifier(d));
+    } else if (!inputHandled) {
+      if (press.name == "backspace") {
+        term.write(getBackspaceSequence(keyPress, shell));
+      } else {
+        term.write(press.sequence);
+      }
     }
   });
 
   term.onExit(({ exitCode }) => {
+    if (parentTermExit && process.ppid) {
+      process.kill(process.ppid);
+    }
     process.exit(exitCode);
   });
   process.stdout.on("resize", () => {

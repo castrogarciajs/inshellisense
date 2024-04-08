@@ -6,9 +6,11 @@ export type CommandToken = {
   complete: boolean;
   isOption: boolean;
   isPersistent?: boolean;
+  isPath?: boolean;
+  isPathComplete?: boolean;
 };
 
-const cmdDelim = /(\|\|)|(&&)|(;)/;
+const cmdDelim = /(\|\|)|(&&)|(;)|(\|)/;
 const spaceRegex = /\s/;
 
 export const parseCommand = (command: string): CommandToken[] => {
@@ -65,7 +67,7 @@ const lex = (command: string): CommandToken[] => {
     tokens.push({
       token: command.slice(readingIdx),
       complete: false,
-      isOption: false,
+      isOption: readingFlag,
     });
   }
 

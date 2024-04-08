@@ -6,11 +6,12 @@ import process from "node:process";
 import os from "node:os";
 import path from "node:path";
 import url from "node:url";
+import fs from "node:fs";
 
-import pty, { IPty, IEvent } from "node-pty";
+import pty, { IPty, IEvent } from "@homebridge/node-pty-prebuilt-multiarch";
 import { Shell, userZdotdir, zdotdir } from "../utils/shell.js";
 import { IsTermOscPs, IstermOscPt, IstermPromptStart, IstermPromptEnd } from "../utils/ansi.js";
-import xterm from "xterm-headless";
+import xterm from "@xterm/headless";
 import { CommandManager, CommandState } from "./commandManager.js";
 import log from "../utils/log.js";
 import { gitBashPath } from "../utils/shell.js";
@@ -25,6 +26,7 @@ type ISTermOptions = {
   cols: number;
   shell: Shell;
   shellArgs?: string[];
+  underTest: boolean;
 };
 
 export class ISTerm implements IPty {
@@ -36,19 +38,21 @@ export class ISTerm implements IPty {
   readonly onData: IEvent<string>;
   readonly onExit: IEvent<{ exitCode: number; signal?: number }>;
   shellBuffer?: string;
+  cwd: string = "";
 
   readonly #pty: IPty;
   readonly #ptyEmitter: EventEmitter;
   readonly #term: xterm.Terminal;
   readonly #commandManager: CommandManager;
+  readonly #shell: Shell;
 
-  constructor({ shell, cols, rows, env, shellTarget, shellArgs }: ISTermOptions & { shellTarget: string }) {
+  constructor({ shell, cols, rows, env, shellTarget, shellArgs, underTest }: ISTermOptions & { shellTarget: string }) {
     this.#pty = pty.spawn(shellTarget, shellArgs ?? [], {
       name: "xterm-256color",
       cols,
       rows,
       cwd: process.cwd(),
-      env: { ...convertToPtyEnv(shell), ...env },
+      env: { ...convertToPtyEnv(shell, underTest), ...env },
     });
     this.pid = this.#pty.pid;
     this.cols = this.#pty.cols;
@@ -58,6 +62,7 @@ export class ISTerm implements IPty {
     this.#term = new xterm.Terminal({ allowProposedApi: true, rows, cols });
     this.#term.parser.registerOscHandler(IsTermOscPs, (data) => this._handleIsSequence(data));
     this.#commandManager = new CommandManager(this.#term, shell);
+    this.#shell = shell;
 
     this.#ptyEmitter = new EventEmitter();
     this.#pty.onData((data) => {
@@ -76,6 +81,31 @@ export class ISTerm implements IPty {
     };
     this.onExit = this.#pty.onExit;
   }
+  on(event: "data", listener: (data: string) => void): void;
+  on(event: "exit", listener: (exitCode: number, signal?: number | undefined) => void): void;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  on(_event: unknown, _listener: unknown): void {
+    throw new Error("Method not implemented as deprecated in node-pty.");
+  }
+
+  private _deserializeIsMessage(message: string): string {
+    return message.replaceAll(/\\(\\|x([0-9a-f]{2}))/gi, (_match: string, op: string, hex?: string) => (hex ? String.fromCharCode(parseInt(hex, 16)) : op));
+  }
+
+  private _sanitizedCwd(cwd: string): string {
+    if (cwd.match(/^['"].*['"]$/)) {
+      cwd = cwd.substring(1, cwd.length - 1);
+    }
+    // Convert a drive prefix to windows style when using Git Bash
+    if (os.platform() === "win32" && this.#shell == Shell.Bash && cwd && cwd.match(/^\/[A-z]{1}\//)) {
+      cwd = `${cwd[1]}:\\` + cwd.substring(3, cwd.length);
+    }
+    // Make the drive letter uppercase on Windows (see vscode #9448)
+    if (os.platform() === "win32" && cwd && cwd[1] === ":") {
+      return cwd[0].toUpperCase() + cwd.substring(1);
+    }
+    return cwd;
+  }
 
   private _handleIsSequence(data: string): boolean {
     const argsIndex = data.indexOf(";");
@@ -87,6 +117,13 @@ export class ISTerm implements IPty {
       case IstermOscPt.PromptEnded:
         this.#commandManager.handlePromptEnd();
         break;
+      case IstermOscPt.CurrentWorkingDirectory: {
+        const cwd = data.split(";").at(1);
+        if (cwd != null) {
+          this.cwd = path.resolve(this._sanitizedCwd(this._deserializeIsMessage(cwd)));
+        }
+        break;
+      }
       default:
         return false;
     }
@@ -139,6 +176,27 @@ export class ISTerm implements IPty {
     };
   }
 
+  private _sameAccent(baseCell: xterm.IBufferCell | undefined, targetCell: xterm.IBufferCell | undefined) {
+    return baseCell?.isBold() == targetCell?.isBold() && baseCell?.isItalic() == targetCell?.isItalic() && baseCell?.isUnderline() == targetCell?.isUnderline();
+  }
+
+  private _getAnsiAccents(cell: xterm.IBufferCell | undefined): string {
+    if (cell == null) return "";
+    let boldAnsi = "";
+    if (cell.isBold()) {
+      boldAnsi = "\x1b[1m";
+    }
+    let italicAnsi = "";
+    if (cell.isItalic()) {
+      italicAnsi = "\x1b[3m";
+    }
+    let underlineAnsi = "";
+    if (cell.isUnderline()) {
+      underlineAnsi = "\x1b[4m";
+    }
+    return boldAnsi + italicAnsi + underlineAnsi;
+  }
+
   private _sameColor(baseCell: xterm.IBufferCell | undefined, targetCell: xterm.IBufferCell | undefined) {
     return (
       baseCell?.getBgColorMode() == targetCell?.getBgColorMode() &&
@@ -185,6 +243,9 @@ export class ISTerm implements IPty {
         if (!this._sameColor(prevCell, cell)) {
           ansiLine.push(this._getAnsiColors(cell));
         }
+        if (!this._sameAccent(prevCell, cell)) {
+          ansiLine.push(this._getAnsiAccents(cell));
+        }
         ansiLine.push(chars == "" ? " " : chars);
         prevCell = cell;
       }
@@ -210,11 +271,11 @@ export class ISTerm implements IPty {
 }
 
 export const spawn = async (options: ISTermOptions): Promise<ISTerm> => {
-  const { shellTarget, shellArgs } = await convertToPtyTarget(options.shell);
+  const { shellTarget, shellArgs } = await convertToPtyTarget(options.shell, options.underTest);
   return new ISTerm({ ...options, shellTarget, shellArgs });
 };
 
-const convertToPtyTarget = async (shell: Shell) => {
+const convertToPtyTarget = async (shell: Shell, underTest: boolean) => {
   const platform = os.platform();
   const shellTarget = shell == Shell.Bash && platform == "win32" ? await gitBashPath() : platform == "win32" ? `${shell}.exe` : shell;
   const shellFolderPath = path.join(path.dirname(url.fileURLToPath(import.meta.url)), "..", "..", "shell");
@@ -224,26 +285,52 @@ const convertToPtyTarget = async (shell: Shell) => {
     case Shell.Bash:
       shellArgs = ["--init-file", path.join(shellFolderPath, "shellIntegration.bash")];
       break;
-    case (Shell.Powershell, Shell.Pwsh):
+    case Shell.Powershell:
+    case Shell.Pwsh:
       shellArgs = ["-noexit", "-command", `try { . "${path.join(shellFolderPath, "shellIntegration.ps1")}" } catch {}`];
       break;
     case Shell.Fish:
       shellArgs = ["--init-command", `. ${path.join(shellFolderPath, "shellIntegration.fish").replace(/(\s+)/g, "\\$1")}`];
+      break;
+    case Shell.Xonsh: {
+      const sharedConfig = os.platform() == "win32" ? path.join("C:\\ProgramData", "xonsh", "xonshrc") : path.join("etc", "xonsh", "xonshrc");
+      const userConfigs = [
+        path.join(os.homedir(), ".xonshrc"),
+        path.join(os.homedir(), ".config", "xonsh", "rc.xsh"),
+        path.join(os.homedir(), ".config", "xonsh", "rc.d"),
+      ];
+      const configs = [sharedConfig, ...userConfigs].filter((config) => fs.existsSync(config));
+      shellArgs = ["--rc", ...configs, path.join(shellFolderPath, "shellIntegration.xsh")];
+      break;
+    }
+    case Shell.Nushell:
+      shellArgs = ["-e", `source \`${path.join(shellFolderPath, "shellIntegration.nu")}\``];
+      if (underTest) shellArgs.push("-n");
       break;
   }
 
   return { shellTarget, shellArgs };
 };
 
-const convertToPtyEnv = (shell: Shell) => {
+const convertToPtyEnv = (shell: Shell, underTest: boolean) => {
+  const env: Record<string, string> = {
+    ...process.env,
+    ISTERM: "1",
+  };
+  if (underTest) env.ISTERM_TESTING = "1";
+
   switch (shell) {
     case Shell.Cmd: {
+      if (underTest) {
+        return { ...env, PROMPT: `${IstermPromptStart}$G ${IstermPromptEnd}` };
+      }
       const prompt = process.env.PROMPT ? process.env.PROMPT : "$P$G";
-      return { ...process.env, PROMPT: `${IstermPromptStart}${prompt}${IstermPromptEnd}` };
+      return { ...env, PROMPT: `${IstermPromptStart}${prompt}${IstermPromptEnd}` };
     }
     case Shell.Zsh: {
-      return { ...process.env, ZDOTDIR: zdotdir, USER_ZDOTDIR: userZdotdir };
+      return { ...env, ZDOTDIR: zdotdir, USER_ZDOTDIR: userZdotdir };
     }
   }
-  return process.env;
+
+  return env;
 };

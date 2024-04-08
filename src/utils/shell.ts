@@ -9,6 +9,7 @@ import fs from "node:fs";
 import url from "node:url";
 import os from "node:os";
 import fsAsync from "node:fs/promises";
+import { KeyPressEvent } from "../ui/suggestionManager.js";
 
 export enum Shell {
   Bash = "bash",
@@ -17,14 +18,33 @@ export enum Shell {
   Zsh = "zsh",
   Fish = "fish",
   Cmd = "cmd",
+  Xonsh = "xonsh",
+  Nushell = "nu",
 }
 
-export const supportedShells = [Shell.Bash, process.platform == "win32" ? Shell.Powershell : null, Shell.Pwsh, Shell.Zsh, Shell.Fish].filter(
-  (shell) => shell != null,
-) as Shell[];
+export const supportedShells = [
+  Shell.Bash,
+  process.platform == "win32" ? Shell.Powershell : null,
+  Shell.Pwsh,
+  Shell.Zsh,
+  Shell.Fish,
+  process.platform == "win32" ? Shell.Cmd : null,
+  Shell.Xonsh,
+  Shell.Nushell,
+].filter((shell) => shell != null) as Shell[];
 
 export const userZdotdir = process.env?.ZDOTDIR ?? os.homedir() ?? `~`;
 export const zdotdir = path.join(os.tmpdir(), `is-zsh`);
+const configFolder = ".inshellisense";
+
+export const setupBashPreExec = async () => {
+  const shellFolderPath = path.join(path.dirname(url.fileURLToPath(import.meta.url)), "..", "..", "shell");
+  const globalConfigPath = path.join(os.homedir(), configFolder);
+  if (!fs.existsSync(globalConfigPath)) {
+    await fsAsync.mkdir(globalConfigPath, { recursive: true });
+  }
+  await fsAsync.cp(path.join(shellFolderPath, "bash-preexec.sh"), path.join(globalConfigPath, "bash-preexec.sh"));
+};
 
 export const setupZshDotfiles = async () => {
   const shellFolderPath = path.join(path.dirname(url.fileURLToPath(import.meta.url)), "..", "..", "shell");
@@ -91,3 +111,11 @@ const getGitBashPaths = async (): Promise<string[]> => {
 
   return gitBashPaths;
 };
+
+export const getBackspaceSequence = (press: KeyPressEvent, shell: Shell) =>
+  shell === Shell.Pwsh || shell === Shell.Powershell || shell === Shell.Cmd || shell === Shell.Nushell ? "\u007F" : press[1].sequence;
+
+export const getPathSeperator = (shell: Shell) => (shell == Shell.Bash || shell == Shell.Xonsh || shell == Shell.Nushell ? "/" : path.sep);
+
+// nu fully re-writes the prompt every keystroke resulting in duplicate start/end sequences on the same line
+export const getShellPromptRewrites = (shell: Shell) => shell == Shell.Nushell;
